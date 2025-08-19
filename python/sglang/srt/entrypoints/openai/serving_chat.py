@@ -250,6 +250,17 @@ class OpenAIServingChat(OpenAIServingBase):
 
             openai_compatible_messages.append(processed_msg)
 
+        # handle stringified arguments: https://github.com/sgl-project/sglang/issues/9009
+        for i, m in enumerate(openai_compatible_messages):
+            if (m.get("role") == "assistant" and isinstance(m.get("tool_calls"), list)):
+                for j, tc in enumerate(m["tool_calls"]):
+                    args = tc.get("function", {}).get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            tc["function"]["arguments"] = json.loads(args)
+                        except Exception:
+                            logging.exception("json.loads(arguments) failed")
+
         # Handle assistant prefix for continue_final_message
         assistant_prefix = None
         if (
