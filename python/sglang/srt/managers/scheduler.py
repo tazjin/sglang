@@ -1312,6 +1312,7 @@ class Scheduler(
                 metrics_collector=(
                     self.metrics_collector if self.enable_metrics else None
                 ),
+                session_id=recv_req.user,
             )
             req.tokenizer = self.tokenizer
 
