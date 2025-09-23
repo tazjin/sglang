@@ -150,6 +150,9 @@ class GenerateReqInput:
     # (Internal) Whether to return bytes for image generation
     return_bytes: bool = False
 
+    # User identifier for client tracking
+    user: Optional[str] = None
+
     def contains_mm_input(self) -> bool:
         return (
             has_valid_data(self.image_data)

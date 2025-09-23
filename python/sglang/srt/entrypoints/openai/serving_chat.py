@@ -175,6 +175,7 @@ class OpenAIServingChat(OpenAIServingBase):
             extra_key=self._compute_extra_key(request),
             priority=request.priority,
             custom_labels=custom_labels,
+            user=request.user,
         )
 
         return adapted_request, request
