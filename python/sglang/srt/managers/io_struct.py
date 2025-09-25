@@ -615,6 +615,9 @@ class TokenizedGenerateReqInput:
     # tracing context
     trace_context: Optional[Dict] = None
 
+    # User identifier for client tracking
+    user: Optional[str] = None
+
 
 @dataclass
 class BatchTokenizedGenerateReqInput:
