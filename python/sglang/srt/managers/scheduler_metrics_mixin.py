@@ -146,6 +146,9 @@ class SchedulerMetricsMixin:
             self.stats.num_paused_reqs = self.num_paused_reqs
             self.num_retracted_reqs = self.num_paused_reqs = 0
 
+            # DLPM metrics - update only during prefill (scheduling decisions)
+            self._update_dlpm_metrics()
+
             # PD disaggregation
             if self.disaggregation_mode == DisaggregationMode.PREFILL:
                 self.stats.num_prefill_prealloc_queue_reqs = len(
