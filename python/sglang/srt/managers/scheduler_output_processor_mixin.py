@@ -15,6 +15,7 @@ from sglang.srt.managers.io_struct import (
     BatchTokenIDOutput,
 )
 from sglang.srt.managers.schedule_batch import BaseFinishReason, Req, ScheduleBatch
+from sglang.srt.managers.schedule_policy import CacheAwarePolicy
 
 if TYPE_CHECKING:
     from sglang.srt.managers.scheduler import (
