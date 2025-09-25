@@ -479,6 +479,10 @@ class Scheduler(
         self.kv_transfer_speed_gb_s: float = 0.0
         self.kv_transfer_latency_ms: float = 0.0
         self.sessions: Dict[str, Session] = {}
+
+        # DLPM state: per-client deficit counters and timestamps
+        self.dlpm_client_deficits: Dict[str, int] = {}
+        self.dlpm_client_timestamps: Dict[str, float] = {}
         self.current_stream = torch.get_device_module(self.device).current_stream()
         if self.device == "cpu":
             self.current_stream.synchronize = lambda: None  # No-op for CPU
@@ -1432,6 +1436,18 @@ class Scheduler(
             self._set_or_validate_priority(req)
             if self._abort_on_queued_limit(req):
                 return
+
+            # DLPM client initialization and state update
+            if self.policy.policy == CacheAwarePolicy.DLPM:
+                client_id = req.session_id if req.session_id else '<anonymous>'
+
+                # Update last seen timestamp
+                self.dlpm_client_timestamps[client_id] = time.perf_counter()
+
+                # Initialize deficit counter for new clients
+                if client_id not in self.dlpm_client_deficits:
+                    self.dlpm_client_deficits[client_id] = 0
+
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
             trace_slice_end("process req", req.rid, auto_next_anon=True)
