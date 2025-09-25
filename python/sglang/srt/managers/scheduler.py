@@ -34,6 +34,9 @@ import zmq
 from torch.distributed import barrier
 
 from sglang.global_config import global_config
+
+# DLPM configuration constants
+DLPM_CLIENT_QUANTUM = 2500  # Default deficit refill value per client
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constrained.base_grammar_backend import (
     INVALID_GRAMMAR_OBJ,
@@ -1506,13 +1509,14 @@ class Scheduler(
 
     def _acknowledge_admission(self, req: Req):
         """
-        Called when a request is successfully admitted to the batch.
-
-        For non-DLPM policies, this does nothing.
-        For DLPM, this will subtract extend tokens from the client's deficit.
+        Called when a request is successfully admitted to the batch. Most
+        policies do not need this information, but DLPM uses it for accounting
+        token costs.
         """
-        # For non-DLPM policies, no admission accounting needed
-        pass
+        if self.policy.policy == CacheAwarePolicy.DLPM:
+            client_id = req.session_id or '<anonymous>'
+            # Subtract extend tokens from client's deficit
+            self.dlpm_client_deficits[client_id] -= req.extend_input_len
 
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.NULL:

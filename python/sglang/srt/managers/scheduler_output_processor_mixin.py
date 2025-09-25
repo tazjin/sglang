@@ -251,6 +251,12 @@ class SchedulerOutputProcessorMixin:
                 # speculative worker will solve the output_ids in speculative decoding
                 req.output_ids.append(next_token_id)
 
+                # DLPM decode token accounting
+                if self.policy.policy == CacheAwarePolicy.DLPM:
+                    client_id = req.session_id or '<anonymous>'
+                    # Subtract 1 token from client's deficit for each generated token
+                    self.dlpm_client_deficits[client_id] -= 1
+
             req.check_finished()
             if req.finished():
                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
@@ -261,6 +267,12 @@ class SchedulerOutputProcessorMixin:
                     self.tree_cache.cache_finished_req(req)
 
                 req.time_stats.completion_time = time.perf_counter()
+
+                # DLPM speculative decode token accounting - bill when request is complete
+                if self.policy.policy == CacheAwarePolicy.DLPM and not batch.spec_algorithm.is_none():
+                    client_id = req.session_id or '<anonymous>'
+                    total_completion_tokens = len(req.output_ids)
+                    self.dlpm_client_deficits[client_id] -= total_completion_tokens
 
             if req.return_logprob and batch.spec_algorithm.is_none():
                 # speculative worker handles logprob in speculative decoding
