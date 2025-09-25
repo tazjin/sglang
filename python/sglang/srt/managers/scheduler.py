@@ -1494,6 +1494,26 @@ class Scheduler(
                     req.rid, req.last_host_node, new_input_tokens, last_hash
                 )
 
+    def _get_admission_iterator(self, waiting_queue: List[Req]):
+        """
+        Generator that yields requests for admission based on the scheduling policy.
+
+        For now, this just iterates through the waiting_queue as before.
+        Later, DLPM will implement deficit-based admission logic here.
+        """
+        # For all non-DLPM policies, just iterate through the queue as before
+        return iter(waiting_queue)
+
+    def _acknowledge_admission(self, req: Req):
+        """
+        Called when a request is successfully admitted to the batch.
+
+        For non-DLPM policies, this does nothing.
+        For DLPM, this will subtract extend tokens from the client's deficit.
+        """
+        # For non-DLPM policies, no admission accounting needed
+        pass
+
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.NULL:
             self._set_or_validate_priority(req)
@@ -1897,7 +1917,8 @@ class Scheduler(
             lora_set = set([req.lora_id for req in self.running_batch.reqs])
 
         # Get requests from the waiting queue to a new prefill batch
-        for req in self.waiting_queue:
+        admission_iterator = self._get_admission_iterator(self.waiting_queue)
+        for req in admission_iterator:
 
             if self.enable_lora and not self.tp_worker.can_run_lora_batch(
                 lora_set
@@ -1935,7 +1956,10 @@ class Scheduler(
                 truncation_align_size=self.truncation_align_size,
             )
 
-            if res != AddReqResult.CONTINUE:
+            if res == AddReqResult.CONTINUE:
+                # Request successfully admitted - acknowledge for policy accounting
+                self._acknowledge_admission(req)
+            else:
                 if res == AddReqResult.NO_TOKEN:
                     if self.enable_hierarchical_cache:
                         # Set batch_is_full after making sure there are requests that can be served
