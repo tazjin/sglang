@@ -172,6 +172,9 @@ class SchedulerStats:
     engine_startup_time: float = 0.0
     engine_load_weights_time: float = 0.0
 
+    # DLPM metrics
+    dlpm_num_clients: int = 0
+
 
 class SchedulerMetricsCollector:
 
@@ -341,6 +344,14 @@ class SchedulerMetricsCollector:
         self.engine_load_weights_time = Gauge(
             name="sglang:engine_load_weights_time",
             documentation="The time taken for the engine to load weights.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+
+        # DLPM metrics
+        self.dlpm_num_clients = Gauge(
+            name="sglang:dlpm_num_clients",
+            documentation="The number of active DLPM clients being tracked.",
             labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
         )
@@ -590,6 +601,9 @@ class SchedulerMetricsCollector:
             self._log_gauge(
                 self.engine_load_weights_time, stats.engine_load_weights_time
             )
+
+        # DLPM metrics
+        self._log_gauge(self.dlpm_num_clients, stats.dlpm_num_clients)
 
         self.last_log_time = time.perf_counter()
 
