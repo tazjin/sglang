@@ -605,6 +605,8 @@ class TokenizedGenerateReqInput:
     # Image gen grpc migration
     return_bytes: bool = False
 
+    # User identifier for client tracking
+    user: Optional[str = None
 
 @dataclass
 class BatchTokenizedGenerateReqInput:

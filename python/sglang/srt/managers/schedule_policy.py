@@ -63,6 +63,7 @@ class CacheAwarePolicy(Enum):
     """Scheduling policies that are aware of the tree cache."""
 
     LPM = "lpm"  # longest prefix match
+    DLPM = "dlpm"  # deficit longest prefix match (fair LPM)
     DFS_WEIGHT = "dfs-weight"  # depth-first search weighting
 
 
@@ -108,7 +109,7 @@ class SchedulePolicy:
             temporary_deprioritized = self._compute_prefix_matches(
                 waiting_queue, policy
             )
-            if policy == CacheAwarePolicy.LPM:
+            if policy == CacheAwarePolicy.LPM or policy == CacheAwarePolicy.DLPM:
                 SchedulePolicy._sort_by_longest_prefix(
                     waiting_queue, temporary_deprioritized
                 )
@@ -129,7 +130,7 @@ class SchedulePolicy:
         return prefix_computed
 
     def _determine_active_policy(self, waiting_queue: List[Req]) -> Policy:
-        if self.policy == CacheAwarePolicy.LPM and len(waiting_queue) > 128:
+        if (self.policy == CacheAwarePolicy.LPM or self.policy == CacheAwarePolicy.DLPM) and len(waiting_queue) > 128:
             # Turn off the expensive prefix matching and sorting when the #queue is large.
             return CacheAgnosticPolicy.FCFS
         return self.policy

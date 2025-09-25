@@ -9,6 +9,7 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.io_struct import AbortReq, BatchEmbeddingOut, BatchTokenIDOut
 from sglang.srt.managers.schedule_batch import BaseFinishReason, Req, ScheduleBatch
+from sglang.srt.managers.schedule_policy import CacheAwarePolicy
 
 if TYPE_CHECKING:
     from sglang.srt.managers.scheduler import (
@@ -244,10 +245,21 @@ class SchedulerOutputProcessorMixin:
                 # speculative worker will solve the output_ids in speculative decoding
                 req.output_ids.append(next_token_id)
 
+                # DLPM decode token accounting
+                if self.policy.policy == CacheAwarePolicy.DLPM:
+                    client_id = req.session_id or '<anonymous>'
+                    self.dlpm_clients[client_id].consume_tokens(1)
+
             req.check_finished()
             if req.finished():
                 self.tree_cache.cache_finished_req(req)
                 req.time_stats.completion_time = time.time()
+
+                # DLPM speculative decode token accounting - bill when request is complete
+                if self.policy.policy == CacheAwarePolicy.DLPM and not batch.spec_algorithm.is_none():
+                    client_id = req.session_id or '<anonymous>'
+                    total_completion_tokens = len(req.output_ids)
+                    self.dlpm_clients[client_id].consume_tokens(total_completion_tokens)
 
             if req.return_logprob and batch.spec_algorithm.is_none():
                 # speculative worker handles logprob in speculative decoding

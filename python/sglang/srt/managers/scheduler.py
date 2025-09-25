@@ -14,13 +14,14 @@
 """A scheduler that manages a tensor parallel GPU worker."""
 
 import faulthandler
+import heapq
 import logging
 import os
 import signal
 import sys
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
 from concurrent import futures
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -34,6 +35,7 @@ import zmq
 from torch.distributed import barrier
 
 from sglang.global_config import global_config
+
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constrained.base_grammar_backend import (
     INVALID_GRAMMAR_OBJ,
@@ -115,6 +117,7 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.managers.schedule_policy import (
     AddReqResult,
+    CacheAwarePolicy,
     PrefillAdder,
     SchedulePolicy,
 )
@@ -171,6 +174,9 @@ from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 
 logger = logging.getLogger(__name__)
 
+# DLPM configuration constants
+DLPM_PREFILL_TOKEN_COST = 0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
+
 # Test retract decode for debugging purposes
 TEST_RETRACT = get_bool_env_var("SGLANG_TEST_RETRACT")
 GRAMMAR_TIMEOUT = float(os.environ.get("SGLANG_GRAMMAR_TIMEOUT", 300))
@@ -193,6 +199,31 @@ class GenerationBatchResult:
 class EmbeddingBatchResult:
     embeddings: torch.Tensor
     bid: int
+
+
+@dataclass
+class DLPMClient:
+    """Tracks DLPM state for a single client."""
+    deficit: int = 0
+    last_seen: float = 0
+    token_delta: int = 0
+
+    def seen(self) -> None:
+        self.last_seen = time.perf_counter()
+
+    def consume_tokens(self, tokens: int) -> None:
+        self.deficit -= tokens
+        self.token_delta += tokens
+        self.seen()
+
+    def refill(self, quantum: int) -> None:
+        self.deficit += quantum
+        self.seen()
+
+    def get_token_delta(self) -> int:
+        d = self.token_delta
+        self.token_delta = 0
+        return d
 
 
 class Scheduler(
@@ -227,6 +258,14 @@ class Scheduler(
         self.pp_size = server_args.pp_size
         self.dp_size = server_args.dp_size
         self.schedule_policy = server_args.schedule_policy
+        self.enable_priority_scheduling = server_args.enable_priority_scheduling
+        self.schedule_low_priority_values_first = (
+            server_args.schedule_low_priority_values_first
+        )
+        self.priority_scheduling_preemption_threshold = (
+            server_args.priority_scheduling_preemption_threshold
+        )
+        self.dlpm_client_quantum = server_args.dlpm_client_quantum
         self.enable_lora = server_args.enable_lora
         self.max_loras_per_batch = server_args.max_loras_per_batch
         self.enable_overlap = not server_args.disable_overlap_schedule
@@ -440,6 +479,10 @@ class Scheduler(
         self.kv_transfer_speed_gb_s: float = 0.0
         self.kv_transfer_latency_ms: float = 0.0
         self.sessions: Dict[str, Session] = {}
+
+        # DLPM state: per-client tracking
+        self.dlpm_clients: Dict[str, DLPMClient] = defaultdict(DLPMClient)
+        self.dlpm_last_metrics_update: float = time.perf_counter()
         self.current_stream = torch.get_device_module(self.device).current_stream()
         if self.device == "cpu":
             self.current_stream.synchronize = lambda: None  # No-op for CPU
@@ -1325,6 +1368,12 @@ class Scheduler(
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             self.disagg_decode_prealloc_queue.add(req)
         else:
+            # DLPM client initialization and state update
+            if self.policy.policy == CacheAwarePolicy.DLPM:
+                client_id = req.session_id if req.session_id else '<anonymous>'
+                # Initialize/update client state
+                self.dlpm_clients[client_id].seen()
+
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
 
@@ -1340,6 +1389,114 @@ class Scheduler(
                 self.tree_cache.prefetch_from_storage(
                     req.rid, req.last_host_node, new_input_tokens, last_hash
                 )
+
+    def _get_admission_iterator(self, waiting_queue: List[Req]):
+        """
+        Generator that yields requests for admission based on the scheduling policy.
+        """
+        if self.policy.policy != CacheAwarePolicy.DLPM:
+            # For non-DLPM policies, just iterate through the queue as before
+            return iter(waiting_queue)
+
+        # DLPM deficit-based admission logic
+        return self._dlpm_admission_iterator(waiting_queue)
+
+    def _dlpm_admission_iterator(self, waiting_queue: List[Req]):
+        """
+        DLPM admission iterator that implements deficit-based admission with refill logic.
+
+        Yields requests from clients with positive deficits. If no clients can be admitted
+        in a full pass through the queue, refills all client deficits and continues.
+        """
+        remaining_requests = waiting_queue.copy()
+
+        # track the maximum number of refills we had to do before any client
+        # could progress, giving a sort of "fairness pressure" signal
+        refills_needed = 0
+        current_refill_streak = 0
+
+        try:
+            while remaining_requests:
+                # Make a copy for iteration since we might modify remaining_requests
+                current_pass_requests = remaining_requests.copy()
+                admitted_any = False
+
+                for req in current_pass_requests:
+                    client_id = req.session_id or '<anonymous>'
+
+                    # Only admit requests from clients with positive deficits
+                    client = self.dlpm_clients[client_id]
+                    if client.deficit > 0:
+                        if current_refill_streak > 0:
+                            refills_needed = max(refills_needed, current_refill_streak)
+                            current_refill_streak = 0
+
+                        yield req
+                        remaining_requests.remove(req)
+                        admitted_any = True
+
+                # If no requests could be admitted, refill ALL deficits
+                # (including for backlogged clients not currently in the queue).
+                if not admitted_any and remaining_requests:
+                    for client in self.dlpm_clients.values():
+                        if client.deficit <= 0:
+                            client.refill(self.dlpm_client_quantum)
+                    current_refill_streak += 1
+
+        finally:
+            self.stats.dlpm_refills_needed = refills_needed
+
+    def _cleanup_inactive_dlpm_clients(self):
+        """Remove DLPM client state for clients that haven't been seen in an hour."""
+        if self.policy.policy != CacheAwarePolicy.DLPM:
+            return
+
+        current_time = time.perf_counter()
+        inactive_clients = [
+            client_id for client_id, client in self.dlpm_clients.items()
+            if current_time - client.last_seen > 3600
+        ]
+
+        for client_id in inactive_clients:
+            del self.dlpm_clients[client_id]
+
+        if inactive_clients:
+            logger.info(f"Cleaned up {len(inactive_clients)} inactive DLPM clients: {inactive_clients}")
+
+    def _update_dlpm_metrics(self):
+        """Update DLPM-specific metrics."""
+        if self.policy.policy == CacheAwarePolicy.DLPM:
+            self.stats.dlpm_num_clients = len(self.dlpm_clients)
+
+            # Only update top clients metric once per minute
+            current_time = time.perf_counter()
+            if current_time - self.dlpm_last_metrics_update >= 60:
+                self.dlpm_last_metrics_update = current_time
+
+                client_tuples = []
+                active_client_count = 0
+                for client_id, client in self.dlpm_clients.items():
+                    delta = client.get_token_delta()
+                    if delta > 0:
+                        client_tuples.append((client_id, delta))
+                        active_client_count += 1
+
+                self.stats.dlpm_top_clients = heapq.nlargest(10, client_tuples, key=lambda c: c[1])
+                self.stats.dlpm_active_clients = active_client_count
+                self.stats.dlpm_needs_flush = True
+
+    def _acknowledge_admission(self, req: Req):
+        """
+        Called when a request is successfully admitted to the batch. Most
+        policies do not need this information, but DLPM uses it for accounting
+        token costs.
+        """
+        if self.policy.policy == CacheAwarePolicy.DLPM:
+            client_id = req.session_id or '<anonymous>'
+            # Subtract extend tokens from client's deficit (with prefill cost multiplier)
+            prefill_token_cost = int(req.extend_input_len * DLPM_PREFILL_TOKEN_COST)
+            client = self.dlpm_clients[client_id]
+            client.consume_tokens(prefill_token_cost)
 
     def _extend_requests_to_queue(self, reqs: List[Req], is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -1414,6 +1571,7 @@ class Scheduler(
     def self_check_during_idle(self):
         self.check_memory()
         self.check_tree_cache()
+        self._cleanup_inactive_dlpm_clients()
         self.new_token_ratio = self.init_new_token_ratio
         self.maybe_sleep_on_idle()
 
@@ -1650,7 +1808,8 @@ class Scheduler(
             lora_set = set([req.lora_id for req in self.running_batch.reqs])
 
         # Get requests from the waiting queue to a new prefill batch
-        for req in self.waiting_queue:
+        admission_iterator = self._get_admission_iterator(self.waiting_queue)
+        for req in admission_iterator:
 
             if self.enable_lora and not self.tp_worker.can_run_lora_batch(
                 lora_set
@@ -1680,7 +1839,10 @@ class Scheduler(
             req.init_next_round_input(self.tree_cache)
             res = adder.add_one_req(req, has_chunked_req=(self.chunked_req is not None))
 
-            if res != AddReqResult.CONTINUE:
+            if res == AddReqResult.CONTINUE:
+                # Request successfully admitted - acknowledge for policy accounting
+                self._acknowledge_admission(req)
+            else:
                 if res == AddReqResult.NO_TOKEN:
                     if self.enable_hierarchical_cache:
                         # Set batch_is_full after making sure there are requests that can be served
