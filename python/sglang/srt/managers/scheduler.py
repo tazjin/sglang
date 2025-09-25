@@ -525,6 +525,10 @@ class Scheduler(
         self.kv_transfer_speed_gb_s: float = 0.0
         self.kv_transfer_latency_ms: float = 0.0
         self.sessions: Dict[str, Session] = {}
+
+        # DLPM state: per-client deficit counters and timestamps
+        self.dlpm_client_deficits: Dict[str, int] = {}
+        self.dlpm_client_timestamps: Dict[str, float] = {}
         self.current_stream = torch.get_device_module(self.device).current_stream()
         if self.device == "cpu":
             self.current_stream.synchronize = lambda: None  # No-op for CPU
@@ -1447,6 +1451,35 @@ class Scheduler(
         # Process each request in the batch
         for tokenized_req in recv_req:
             self.handle_generate_request(tokenized_req)
+
+    def _add_request_to_queue(self, req: Req):
+        req.queue_time_start = time.perf_counter()
+        if self.disaggregation_mode == DisaggregationMode.PREFILL:
+            self._prefetch_kvcache(req)
+            self.disagg_prefill_bootstrap_queue.add(
+                req, self.model_config.num_key_value_heads
+            )
+        elif self.disaggregation_mode == DisaggregationMode.DECODE:
+            self.disagg_decode_prealloc_queue.add(req)
+        else:
+            self._set_or_validate_priority(req)
+            if self._abort_on_queued_limit(req):
+                return
+
+            # DLPM client initialization and state update
+            if self.policy.policy == CacheAwarePolicy.DLPM:
+                client_id = req.session_id if req.session_id else '<anonymous>'
+
+                # Update last seen timestamp
+                self.dlpm_client_timestamps[client_id] = time.perf_counter()
+
+                # Initialize deficit counter for new clients
+                if client_id not in self.dlpm_client_deficits:
+                    self.dlpm_client_deficits[client_id] = 0
+
+            self._prefetch_kvcache(req)
+            self.waiting_queue.append(req)
+            trace_slice_end("process req", req.rid, auto_next_anon=True)
 
     def _prefetch_kvcache(self, req: Req):
         if self.enable_hicache_storage:
