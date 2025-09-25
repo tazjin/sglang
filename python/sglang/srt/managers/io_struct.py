@@ -629,6 +629,9 @@ class TokenizedGenerateReqInput:
     # (Internal) Whether to return bytes for image generation
     return_bytes: bool = False
 
+    # User identifier for client tracking
+    user: Optional[str] = None
+
 
 @dataclass
 class BatchTokenizedGenerateReqInput:
