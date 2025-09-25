@@ -37,6 +37,8 @@ from sglang.global_config import global_config
 
 # DLPM configuration constants
 DLPM_CLIENT_QUANTUM = 2500  # Default deficit refill value per client
+DLPM_PREFILL_TOKEN_COST = 0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
+
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constrained.base_grammar_backend import (
     INVALID_GRAMMAR_OBJ,
@@ -1517,8 +1519,9 @@ class Scheduler(
         """
         if self.policy.policy == CacheAwarePolicy.DLPM:
             client_id = req.session_id or '<anonymous>'
-            # Subtract extend tokens from client's deficit
-            self.dlpm_client_deficits[client_id] -= req.extend_input_len
+            # Subtract extend tokens from client's deficit (with prefill cost multiplier)
+            prefill_token_cost = int(req.extend_input_len * DLPM_PREFILL_TOKEN_COST)
+            self.dlpm_client_deficits[client_id] -= prefill_token_cost
 
     def _extend_requests_to_queue(self, reqs: List[Req], is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
