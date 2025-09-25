@@ -1491,6 +1491,11 @@ class Scheduler(
                     if deficit <= 0:
                         self.dlpm_client_deficits[client_id] += DLPM_CLIENT_QUANTUM
 
+    def _update_dlpm_metrics(self):
+        """Update DLPM-specific metrics."""
+        if self.policy.policy == CacheAwarePolicy.DLPM:
+            self.stats.dlpm_num_clients = len(self.dlpm_client_deficits)
+
     def _acknowledge_admission(self, req: Req):
         """
         Called when a request is successfully admitted to the batch. Most
