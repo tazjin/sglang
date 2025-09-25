@@ -1449,12 +1449,43 @@ class Scheduler(
     def _get_admission_iterator(self, waiting_queue: List[Req]):
         """
         Generator that yields requests for admission based on the scheduling policy.
-
-        For now, this just iterates through the waiting_queue as before.
-        Later, DLPM will implement deficit-based admission logic here.
         """
-        # For all non-DLPM policies, just iterate through the queue as before
-        return iter(waiting_queue)
+        if self.policy.policy != CacheAwarePolicy.DLPM:
+            # For non-DLPM policies, just iterate through the queue as before
+            return iter(waiting_queue)
+
+        # DLPM deficit-based admission logic
+        return self._dlpm_admission_iterator(waiting_queue)
+
+    def _dlpm_admission_iterator(self, waiting_queue: List[Req]):
+        """
+        DLPM admission iterator that implements deficit-based admission with refill logic.
+
+        Yields requests from clients with positive deficits. If no clients can be admitted
+        in a full pass through the queue, refills all client deficits and continues.
+        """
+        remaining_requests = waiting_queue.copy()
+
+        while remaining_requests:
+            # Make a copy for iteration since we might modify remaining_requests
+            current_pass_requests = remaining_requests.copy()
+            admitted_any = False
+
+            for req in current_pass_requests:
+                client_id = req.session_id or '<anonymous>'
+
+                # Only admit requests from clients with positive deficits
+                if self.dlpm_client_deficits.get(client_id, 0) > 0:
+                    yield req
+                    remaining_requests.remove(req)
+                    admitted_any = True
+
+            # If we went through all requests but couldn't admit *any*, ...
+            if not admitted_any and remaining_requests:
+                # refill ALL known clients with no remaining credits.
+                for client_id, deficit in self.dlpm_client_deficits.items():
+                    if deficit <= 0:
+                        self.dlpm_client_deficits[client_id] += DLPM_CLIENT_QUANTUM
 
     def _acknowledge_admission(self, req: Req):
         """
