@@ -1479,7 +1479,7 @@ class Scheduler(
                 client_id = req.session_id or '<anonymous>'
 
                 # Only admit requests from clients with positive deficits
-                if self.dlpm_client_deficits.get(client_id, 0) > 0:
+                if self.dlpm_client_deficits.setdefault(client_id, 0) > 0:
                     yield req
                     remaining_requests.remove(req)
                     admitted_any = True
