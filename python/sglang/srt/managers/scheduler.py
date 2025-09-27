@@ -14,6 +14,7 @@
 """A scheduler that manages a tensor parallel GPU worker."""
 
 import faulthandler
+import heapq
 import logging
 import os
 import signal
@@ -223,17 +224,24 @@ class DLPMClient:
     """Tracks DLPM state for a single client."""
     deficit: int = 0
     last_seen: float = 0
+    token_delta: int = 0
 
     def seen(self) -> None:
         self.last_seen = time.perf_counter()
 
     def consume_tokens(self, tokens: int) -> None:
         self.deficit -= tokens
+        self.token_delta += tokens
         self.seen()
 
     def refill(self) -> None:
         self.deficit += DLPM_CLIENT_QUANTUM
         self.seen()
+
+    def get_token_delta(self) -> int:
+        d = self.token_delta
+        self.token_delta = 0
+        return d
 
 
 class Scheduler(
@@ -503,6 +511,7 @@ class Scheduler(
 
         # DLPM state: per-client tracking
         self.dlpm_clients: Dict[str, DLPMClient] = defaultdict(DLPMClient)
+        self.dlpm_last_metrics_update: float = time.perf_counter()
         self.current_stream = torch.get_device_module(self.device).current_stream()
         if self.device == "cpu":
             self.current_stream.synchronize = lambda: None  # No-op for CPU
@@ -1524,6 +1533,19 @@ class Scheduler(
         """Update DLPM-specific metrics."""
         if self.policy.policy == CacheAwarePolicy.DLPM:
             self.stats.dlpm_num_clients = len(self.dlpm_clients)
+
+            # Only update top clients metric once per minute
+            current_time = time.perf_counter()
+            if current_time - self.dlpm_last_metrics_update >= 60:
+                self.dlpm_last_metrics_update = current_time
+
+                client_tuples = []
+                for client_id, client in self.dlpm_clients.items():
+                    delta = client.get_token_delta()
+                    if delta > 0:
+                        client_tuples.append((client_id, delta))
+
+                self.stats.dlpm_top_clients = heapq.nlargest(10, client_tuples, key=lambda c: c[1])
 
     def _acknowledge_admission(self, req: Req):
         """
