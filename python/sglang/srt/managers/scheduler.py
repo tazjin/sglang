@@ -20,7 +20,7 @@ import signal
 import sys
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
 from concurrent import futures
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -34,10 +34,6 @@ import zmq
 from torch.distributed import barrier
 
 from sglang.global_config import global_config
-
-# DLPM configuration constants
-DLPM_CLIENT_QUANTUM = 2500  # Default deficit refill value per client
-DLPM_PREFILL_TOKEN_COST = 0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
 
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constrained.base_grammar_backend import (
@@ -200,6 +196,10 @@ from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 
 logger = logging.getLogger(__name__)
 
+# DLPM configuration constants
+DLPM_CLIENT_QUANTUM = 2500  # Default deficit refill value per client
+DLPM_PREFILL_TOKEN_COST = 0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
+
 # Test retract decode for debugging purposes
 TEST_RETRACT = get_bool_env_var("SGLANG_TEST_RETRACT")
 GRAMMAR_TIMEOUT = float(os.environ.get("SGLANG_GRAMMAR_TIMEOUT", 300))
@@ -257,6 +257,24 @@ class GenerationBatchResult:
 @dataclass
 class EmbeddingBatchResult:
     embeddings: torch.Tensor
+
+
+@dataclass
+class DLPMClient:
+    """Tracks DLPM state for a single client."""
+    deficit: int = 0
+    last_seen: float = 0
+
+    def seen(self) -> None:
+        self.last_seen = time.perf_counter()
+
+    def consume_tokens(self, tokens: int) -> None:
+        self.deficit -= tokens
+        self.seen()
+
+    def refill(self) -> None:
+        self.deficit += DLPM_CLIENT_QUANTUM
+        self.seen()
 
 
 class Scheduler(
@@ -532,9 +550,8 @@ class Scheduler(
         self.kv_transfer_latency_ms: float = 0.0
         self.sessions: Dict[str, Session] = {}
 
-        # DLPM state: per-client deficit counters and timestamps
-        self.dlpm_client_deficits: Dict[str, int] = {}
-        self.dlpm_client_timestamps: Dict[str, float] = {}
+        # DLPM state: per-client tracking
+        self.dlpm_clients: Dict[str, DLPMClient] = defaultdict(DLPMClient)
         self.current_stream = torch.get_device_module(self.device).current_stream()
         if self.device == "cpu":
             self.current_stream.synchronize = lambda: None  # No-op for CPU
@@ -1475,13 +1492,8 @@ class Scheduler(
             # DLPM client initialization and state update
             if self.policy.policy == CacheAwarePolicy.DLPM:
                 client_id = req.session_id if req.session_id else '<anonymous>'
-
-                # Update last seen timestamp
-                self.dlpm_client_timestamps[client_id] = time.perf_counter()
-
-                # Initialize deficit counter for new clients
-                if client_id not in self.dlpm_client_deficits:
-                    self.dlpm_client_deficits[client_id] = 0
+                # Initialize/update client state
+                self.dlpm_clients[client_id].seen()
 
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
@@ -1529,7 +1541,8 @@ class Scheduler(
                 client_id = req.session_id or '<anonymous>'
 
                 # Only admit requests from clients with positive deficits
-                if self.dlpm_client_deficits.setdefault(client_id, 0) > 0:
+                client = self.dlpm_clients[client_id]
+                if client.deficit > 0:
                     yield req
                     remaining_requests.remove(req)
                     admitted_any = True
@@ -1537,9 +1550,9 @@ class Scheduler(
             # If we went through all requests but couldn't admit *any*, ...
             if not admitted_any and remaining_requests:
                 # refill ALL known clients with no remaining credits.
-                for client_id, deficit in self.dlpm_client_deficits.items():
-                    if deficit <= 0:
-                        self.dlpm_client_deficits[client_id] += DLPM_CLIENT_QUANTUM
+                for client in self.dlpm_clients.values():
+                    if client.deficit <= 0:
+                        client.refill()
 
     def _cleanup_inactive_dlpm_clients(self):
         """Remove DLPM client state for clients that haven't been seen in an hour."""
@@ -1547,16 +1560,13 @@ class Scheduler(
             return
 
         current_time = time.perf_counter()
-        inactive_clients = []
+        inactive_clients = [
+            client_id for client_id, client in self.dlpm_clients.items()
+            if current_time - client.last_seen > 3600
+        ]
 
-        for client_id, last_seen in self.dlpm_client_timestamps.items():
-            if current_time - last_seen > 3600:  # 1 hour timeout
-                inactive_clients.append(client_id)
-
-        # Remove inactive clients from all tracking dictionaries
         for client_id in inactive_clients:
-            self.dlpm_client_deficits.pop(client_id, None)
-            self.dlpm_client_timestamps.pop(client_id, None)
+            del self.dlpm_clients[client_id]
 
         if inactive_clients:
             logger.info(f"Cleaned up {len(inactive_clients)} inactive DLPM clients: {inactive_clients}")
@@ -1564,7 +1574,7 @@ class Scheduler(
     def _update_dlpm_metrics(self):
         """Update DLPM-specific metrics."""
         if self.policy.policy == CacheAwarePolicy.DLPM:
-            self.stats.dlpm_num_clients = len(self.dlpm_client_deficits)
+            self.stats.dlpm_num_clients = len(self.dlpm_clients)
 
     def _acknowledge_admission(self, req: Req):
         """
@@ -1576,7 +1586,8 @@ class Scheduler(
             client_id = req.session_id or '<anonymous>'
             # Subtract extend tokens from client's deficit (with prefill cost multiplier)
             prefill_token_cost = int(req.extend_input_len * DLPM_PREFILL_TOKEN_COST)
-            self.dlpm_client_deficits[client_id] -= prefill_token_cost
+            client = self.dlpm_clients[client_id]
+            client.consume_tokens(prefill_token_cost)
 
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.NULL:
