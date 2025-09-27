@@ -1568,6 +1568,7 @@ class Scheduler(
                         client_tuples.append((client_id, delta))
 
                 self.stats.dlpm_top_clients = heapq.nlargest(10, client_tuples, key=lambda c: c[1])
+                self.stats.dlpm_needs_flush = True
 
     def _acknowledge_admission(self, req: Req):
         """
