@@ -1512,6 +1512,26 @@ class Scheduler(
                     if deficit <= 0:
                         self.dlpm_client_deficits[client_id] += DLPM_CLIENT_QUANTUM
 
+    def _cleanup_inactive_dlpm_clients(self):
+        """Remove DLPM client state for clients that haven't been seen in an hour."""
+        if self.policy.policy != CacheAwarePolicy.DLPM:
+            return
+
+        current_time = time.perf_counter()
+        inactive_clients = []
+
+        for client_id, last_seen in self.dlpm_client_timestamps.items():
+            if current_time - last_seen > 3600:  # 1 hour timeout
+                inactive_clients.append(client_id)
+
+        # Remove inactive clients from all tracking dictionaries
+        for client_id in inactive_clients:
+            self.dlpm_client_deficits.pop(client_id, None)
+            self.dlpm_client_timestamps.pop(client_id, None)
+
+        if inactive_clients:
+            logger.info(f"Cleaned up {len(inactive_clients)} inactive DLPM clients: {inactive_clients}")
+
     def _update_dlpm_metrics(self):
         """Update DLPM-specific metrics."""
         if self.policy.policy == CacheAwarePolicy.DLPM:
@@ -1666,6 +1686,7 @@ class Scheduler(
     def self_check_during_idle(self):
         self.check_memory()
         self.check_tree_cache()
+        self._cleanup_inactive_dlpm_clients()
         self.new_token_ratio = self.init_new_token_ratio
         self.maybe_sleep_on_idle()
 
