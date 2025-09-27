@@ -152,7 +152,7 @@ class SchedulerStats:
     # DLPM metrics
     dlpm_num_clients: int = 0
     dlpm_top_clients: List[Tuple[str, int]] = field(default_factory=list)
-
+    dlpm_needs_flush: bool = False
 
 class SchedulerMetricsCollector:
 
@@ -162,6 +162,9 @@ class SchedulerMetricsCollector:
 
         self.labels = labels
         self.last_log_time = time.perf_counter()
+
+        # Track known clients for zeroing out stale metrics
+        self.dlpm_known_clients = set()
 
         self.num_running_reqs = Gauge(
             name="sglang:num_running_reqs",
@@ -578,10 +581,22 @@ class SchedulerMetricsCollector:
         # DLPM metrics
         self._log_gauge(self.dlpm_num_clients, stats.dlpm_num_clients)
 
-        # Log top clients metrics with client_id label
-        for client_id, tokens_consumed in stats.dlpm_top_clients:
-            labels = {**self.labels, "client": client_id}
-            self.dlpm_top_clients_tokens.labels(**labels).set(tokens_consumed)
+        if stats.dlpm_needs_flush:
+            stats.dlpm_needs_flush = False
+
+            # Zero out metrics for clients that are no longer in top 10
+            current_top_clients = {client_id for client_id, _ in stats.dlpm_top_clients}
+            stale_clients = self.dlpm_known_clients - current_top_clients
+            for client_id in stale_clients:
+                labels = {**self.labels, "client": client_id}
+                self.dlpm_top_clients_tokens.labels(**labels).set(0)
+                self.dlpm_known_clients.remove(client_id)
+
+            # Set metrics for current top clients
+            for client_id, tokens_consumed in stats.dlpm_top_clients:
+                labels = {**self.labels, "client": client_id}
+                self.dlpm_top_clients_tokens.labels(**labels).set(tokens_consumed)
+                self.dlpm_known_clients.add(client_id)
 
         self.last_log_time = time.perf_counter()
 
