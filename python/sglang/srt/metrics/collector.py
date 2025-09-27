@@ -15,7 +15,7 @@
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from sglang.srt.metrics.utils import exponential_buckets, generate_buckets
 from sglang.srt.server_args import ServerArgs
@@ -174,6 +174,7 @@ class SchedulerStats:
 
     # DLPM metrics
     dlpm_num_clients: int = 0
+    dlpm_top_clients: List[Tuple[str, int]] = field(default_factory=list)
 
 
 class SchedulerMetricsCollector:
@@ -353,6 +354,12 @@ class SchedulerMetricsCollector:
             name="sglang:dlpm_num_clients",
             documentation="The number of active DLPM clients being tracked.",
             labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+        self.dlpm_top_clients_tokens = Gauge(
+            name="sglang:dlpm_top_clients_tokens",
+            documentation="The tokens consumed by top DLPM clients since last metrics update.",
+            labelnames=list(labels.keys()) + ["client"],
             multiprocess_mode="mostrecent",
         )
 
@@ -604,6 +611,11 @@ class SchedulerMetricsCollector:
 
         # DLPM metrics
         self._log_gauge(self.dlpm_num_clients, stats.dlpm_num_clients)
+
+        # Log top clients metrics with client_id label
+        for client_id, tokens_consumed in stats.dlpm_top_clients:
+            labels = {**self.labels, "client": client_id}
+            self.dlpm_top_clients_tokens.labels(**labels).set(tokens_consumed)
 
         self.last_log_time = time.perf_counter()
 
