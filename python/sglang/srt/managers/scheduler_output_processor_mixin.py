@@ -252,8 +252,7 @@ class SchedulerOutputProcessorMixin:
                 # DLPM decode token accounting
                 if self.policy.policy == CacheAwarePolicy.DLPM:
                     client_id = req.session_id or '<anonymous>'
-                    # Subtract 1 token from client's deficit for each generated token
-                    self.dlpm_client_deficits[client_id] -= 1
+                    self.dlpm_clients[client_id].consume_tokens(1)
 
             req.check_finished()
             if req.finished():
@@ -270,7 +269,7 @@ class SchedulerOutputProcessorMixin:
                 if self.policy.policy == CacheAwarePolicy.DLPM and not batch.spec_algorithm.is_none():
                     client_id = req.session_id or '<anonymous>'
                     total_completion_tokens = len(req.output_ids)
-                    self.dlpm_client_deficits[client_id] -= total_completion_tokens
+                    self.dlpm_clients[client_id].consume_tokens(total_completion_tokens)
 
             if req.return_logprob and batch.spec_algorithm.is_none():
                 # speculative worker handles logprob in speculative decoding
