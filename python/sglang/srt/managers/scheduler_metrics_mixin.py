@@ -146,6 +146,9 @@ class SchedulerMetricsMixin:
                 total_queue_latency += req.queue_time_end - req.queue_time_start
             self.stats.avg_request_queue_latency = total_queue_latency / num_new_seq
 
+            # DLPM metrics - update only during prefill (scheduling decisions)
+            self._update_dlpm_metrics()
+
             if self.disaggregation_mode == DisaggregationMode.PREFILL:
                 self.stats.num_prefill_prealloc_queue_reqs = len(
                     self.disagg_prefill_bootstrap_queue.queue

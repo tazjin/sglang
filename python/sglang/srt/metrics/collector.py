@@ -15,7 +15,7 @@
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from sglang.srt.metrics.utils import exponential_buckets, generate_buckets
 from sglang.srt.server_args import ServerArgs
@@ -172,6 +172,12 @@ class SchedulerStats:
     engine_startup_time: float = 0.0
     engine_load_weights_time: float = 0.0
 
+    # DLPM metrics
+    dlpm_num_clients: int = 0
+    dlpm_top_clients: List[Tuple[str, int]] = field(default_factory=list)
+    dlpm_needs_flush: bool = False
+    dlpm_refills_needed: int = 0
+    dlpm_active_clients: int = 0
 
 class SchedulerMetricsCollector:
 
@@ -181,6 +187,9 @@ class SchedulerMetricsCollector:
 
         self.labels = labels
         self.last_log_time = time.perf_counter()
+
+        # Track known clients for zeroing out stale metrics
+        self.dlpm_known_clients = set()
 
         self.num_running_reqs = Gauge(
             name="sglang:num_running_reqs",
@@ -341,6 +350,32 @@ class SchedulerMetricsCollector:
         self.engine_load_weights_time = Gauge(
             name="sglang:engine_load_weights_time",
             documentation="The time taken for the engine to load weights.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+
+        # DLPM metrics
+        self.dlpm_num_clients = Gauge(
+            name="sglang:dlpm_num_clients",
+            documentation="The number of active DLPM clients being tracked.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+        self.dlpm_top_clients_tokens = Gauge(
+            name="sglang:dlpm_top_clients_tokens",
+            documentation="The tokens consumed by top DLPM clients since last metrics update.",
+            labelnames=list(labels.keys()) + ["client"],
+            multiprocess_mode="mostrecent",
+        )
+        self.dlpm_refills_needed = Gauge(
+            name="sglang:dlpm_refills_needed",
+            documentation="The most refills needed before progress could be made.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+        self.dlpm_active_clients = Gauge(
+            name="sglang:dlpm_active_clients",
+            documentation="The number of active clients with positive token consumption in the current window.",
             labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
         )
@@ -590,6 +625,28 @@ class SchedulerMetricsCollector:
             self._log_gauge(
                 self.engine_load_weights_time, stats.engine_load_weights_time
             )
+
+        # DLPM metrics
+        self._log_gauge(self.dlpm_num_clients, stats.dlpm_num_clients)
+        self._log_gauge(self.dlpm_refills_needed, stats.dlpm_refills_needed)
+        self._log_gauge(self.dlpm_active_clients, stats.dlpm_active_clients)
+
+        if stats.dlpm_needs_flush:
+            stats.dlpm_needs_flush = False
+
+            # Zero out metrics for clients that are no longer in top 10
+            current_top_clients = {client_id for client_id, _ in stats.dlpm_top_clients}
+            stale_clients = self.dlpm_known_clients - current_top_clients
+            for client_id in stale_clients:
+                labels = {**self.labels, "client": client_id}
+                self.dlpm_top_clients_tokens.labels(**labels).set(0)
+                self.dlpm_known_clients.remove(client_id)
+
+            # Set metrics for current top clients
+            for client_id, tokens_consumed in stats.dlpm_top_clients:
+                labels = {**self.labels, "client": client_id}
+                self.dlpm_top_clients_tokens.labels(**labels).set(tokens_consumed)
+                self.dlpm_known_clients.add(client_id)
 
         self.last_log_time = time.perf_counter()
 

@@ -144,6 +144,9 @@ class GenerateReqInput:
     # For customer metric labels
     customer_labels: Optional[Dict[str, str]] = None
 
+    # User identifier for client tracking
+    user: Optional[str] = None
+
     def contains_mm_input(self) -> bool:
         return (
             has_valid_data(self.image_data)
@@ -611,6 +614,9 @@ class TokenizedGenerateReqInput:
 
     # tracing context
     trace_context: Optional[Dict] = None
+
+    # User identifier for client tracking
+    user: Optional[str] = None
 
 
 @dataclass

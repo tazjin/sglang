@@ -151,6 +151,7 @@ class OpenAIServingChat(OpenAIServingBase):
             rid=request.rid,
             priority=request.priority,
             customer_labels=customer_labels,
+            user=request.user,
         )
 
         return adapted_request, request
