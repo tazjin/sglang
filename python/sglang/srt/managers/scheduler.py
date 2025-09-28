@@ -1554,12 +1554,15 @@ class Scheduler(
                 self.dlpm_last_metrics_update = current_time
 
                 client_tuples = []
+                active_client_count = 0
                 for client_id, client in self.dlpm_clients.items():
                     delta = client.get_token_delta()
                     if delta > 0:
                         client_tuples.append((client_id, delta))
+                        active_client_count += 1
 
                 self.stats.dlpm_top_clients = heapq.nlargest(10, client_tuples, key=lambda c: c[1])
+                self.stats.dlpm_active_clients = active_client_count
                 self.stats.dlpm_needs_flush = True
 
     def _acknowledge_admission(self, req: Req):
