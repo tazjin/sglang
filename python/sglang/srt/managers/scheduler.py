@@ -1490,27 +1490,41 @@ class Scheduler(
         """
         remaining_requests = waiting_queue.copy()
 
-        while remaining_requests:
-            # Make a copy for iteration since we might modify remaining_requests
-            current_pass_requests = remaining_requests.copy()
-            admitted_any = False
+        # track the maximum number of refills we had to do before any client
+        # could progress, giving a sort of "fairness pressure" signal
+        refills_needed = 0
+        current_refill_streak = 0
 
-            for req in current_pass_requests:
-                client_id = req.session_id or '<anonymous>'
+        try:
+            while remaining_requests:
+                # Make a copy for iteration since we might modify remaining_requests
+                current_pass_requests = remaining_requests.copy()
+                admitted_any = False
 
-                # Only admit requests from clients with positive deficits
-                client = self.dlpm_clients[client_id]
-                if client.deficit > 0:
-                    yield req
-                    remaining_requests.remove(req)
-                    admitted_any = True
+                for req in current_pass_requests:
+                    client_id = req.session_id or '<anonymous>'
 
-            # If we went through all requests but couldn't admit *any*, ...
-            if not admitted_any and remaining_requests:
-                # refill ALL known clients with no remaining credits.
-                for client in self.dlpm_clients.values():
-                    if client.deficit <= 0:
-                        client.refill()
+                    # Only admit requests from clients with positive deficits
+                    client = self.dlpm_clients[client_id]
+                    if client.deficit > 0:
+                        if current_refill_streak > 0:
+                            refills_needed = max(refills_needed, current_refill_streak)
+                            current_refill_streak = 0
+
+                        yield req
+                        remaining_requests.remove(req)
+                        admitted_any = True
+
+                # If no requests could be admitted, refill ALL deficits
+                # (including for backlogged clients not currently in the queue).
+                if not admitted_any and remaining_requests:
+                    for client in self.dlpm_clients.values():
+                        if client.deficit <= 0:
+                            client.refill()
+                    current_refill_streak += 1
+
+        finally:
+            self.stats.dlpm_refills_needed = refills_needed
 
     def _cleanup_inactive_dlpm_clients(self):
         """Remove DLPM client state for clients that haven't been seen in an hour."""
