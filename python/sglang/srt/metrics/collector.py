@@ -176,6 +176,7 @@ class SchedulerStats:
     dlpm_num_clients: int = 0
     dlpm_top_clients: List[Tuple[str, int]] = field(default_factory=list)
     dlpm_needs_flush: bool = False
+    dlpm_refills_needed: int = 0
 
 class SchedulerMetricsCollector:
 
@@ -363,6 +364,12 @@ class SchedulerMetricsCollector:
             name="sglang:dlpm_top_clients_tokens",
             documentation="The tokens consumed by top DLPM clients since last metrics update.",
             labelnames=list(labels.keys()) + ["client"],
+            multiprocess_mode="mostrecent",
+        )
+        self.dlpm_refills_needed = Gauge(
+            name="sglang:dlpm_refills_needed",
+            documentation="The most refills needed before progress could be made.",
+            labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
         )
 
@@ -614,6 +621,7 @@ class SchedulerMetricsCollector:
 
         # DLPM metrics
         self._log_gauge(self.dlpm_num_clients, stats.dlpm_num_clients)
+        self._log_gauge(self.dlpm_refills_needed, stats.dlpm_refills_needed)
 
         if stats.dlpm_needs_flush:
             stats.dlpm_needs_flush = False
