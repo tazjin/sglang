@@ -192,7 +192,6 @@ from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 logger = logging.getLogger(__name__)
 
 # DLPM configuration constants
-DLPM_CLIENT_QUANTUM = 2500  # Default deficit refill value per client
 DLPM_PREFILL_TOKEN_COST = 0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
 
 # Test retract decode for debugging purposes
@@ -234,8 +233,8 @@ class DLPMClient:
         self.token_delta += tokens
         self.seen()
 
-    def refill(self) -> None:
-        self.deficit += DLPM_CLIENT_QUANTUM
+    def refill(self, quantum: int) -> None:
+        self.deficit += quantum
         self.seen()
 
     def get_token_delta(self) -> int:
@@ -283,6 +282,7 @@ class Scheduler(
         self.priority_scheduling_preemption_threshold = (
             server_args.priority_scheduling_preemption_threshold
         )
+        self.dlpm_client_quantum = server_args.dlpm_client_quantum
         self.enable_lora = server_args.enable_lora
         self.max_loras_per_batch = server_args.max_loras_per_batch
         self.enable_overlap = not server_args.disable_overlap_schedule
@@ -1521,7 +1521,7 @@ class Scheduler(
                 if not admitted_any and remaining_requests:
                     for client in self.dlpm_clients.values():
                         if client.deficit <= 0:
-                            client.refill()
+                            client.refill(self.dlpm_client_quantum)
                     current_refill_streak += 1
 
         finally:
