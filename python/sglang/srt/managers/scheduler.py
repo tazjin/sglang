@@ -15,6 +15,7 @@
 
 import faulthandler
 import heapq
+import json
 import logging
 import os
 import signal
@@ -286,6 +287,7 @@ class Scheduler(
             server_args.priority_scheduling_preemption_threshold
         )
         self.dlpm_client_quantum = server_args.dlpm_client_quantum
+        self.dlpm_overrides_file = server_args.dlpm_overrides_file
         self.enable_lora = server_args.enable_lora
         self.max_loras_per_batch = server_args.max_loras_per_batch
         self.enable_overlap = not server_args.disable_overlap_schedule
@@ -515,6 +517,10 @@ class Scheduler(
         # DLPM state: per-client tracking
         self.dlpm_clients: Dict[str, DLPMClient] = defaultdict(DLPMClient)
         self.dlpm_last_metrics_update: float = time.perf_counter()
+        # DLPM overrides state
+        self.dlpm_quantum_overrides: Dict[str, int] = {}
+        self.dlpm_last_reload_time: float = time.perf_counter()
+        self.dlpm_last_file_mtime: float = 0.0
         self.current_stream = torch.get_device_module(self.device).current_stream()
         if self.device == "cpu":
             self.current_stream.synchronize = lambda: None  # No-op for CPU
@@ -1510,6 +1516,9 @@ class Scheduler(
         Yields requests from clients with positive deficits. If no clients can be admitted
         in a full pass through the queue, refills all client deficits and continues.
         """
+        # Check for DLPM overrides updates
+        self._maybe_reload_dlpm_overrides()
+
         remaining_requests = waiting_queue.copy()
 
         # track the maximum number of refills we had to do before any client
@@ -1540,9 +1549,11 @@ class Scheduler(
                 # If no requests could be admitted, refill ALL deficits
                 # (including for backlogged clients not currently in the queue).
                 if not admitted_any and remaining_requests:
-                    for client in self.dlpm_clients.values():
+                    for client_id, client in self.dlpm_clients.items():
                         if client.deficit <= 0:
-                            client.refill(self.dlpm_client_quantum)
+                            # Use client-specific quantum override if available, otherwise use global quantum
+                            quantum = self.dlpm_quantum_overrides.get(client_id, self.dlpm_client_quantum)
+                            client.refill(quantum)
                     current_refill_streak += 1
 
         finally:
@@ -1564,6 +1575,69 @@ class Scheduler(
 
         if inactive_clients:
             logger.info(f"Cleaned up {len(inactive_clients)} inactive DLPM clients: {inactive_clients}")
+
+    def _maybe_reload_dlpm_overrides(self):
+        """Periodically reload DLPM quantum overrides from file."""
+        if not self.dlpm_overrides_file:
+            return
+
+        current_time = time.perf_counter()
+        if current_time - self.dlpm_last_reload_time <= 60.0 :
+            return
+
+        try:
+            # Check if file exists and get modification time
+            if not os.path.exists(self.dlpm_overrides_file):
+                # File doesn't exist - clear any existing overrides
+                if self.dlpm_quantum_overrides:
+                    logger.info("DLPM overrides file removed, clearing all overrides")
+                    self.dlpm_quantum_overrides = {}
+                self.dlpm_last_reload_time = current_time
+                return
+
+            current_mtime = os.path.getmtime(self.dlpm_overrides_file)
+
+            # Only reload if file was modified
+            if current_mtime <= self.dlpm_last_file_mtime:
+                self.dlpm_last_reload_time = current_time
+                return
+
+            # Read and parse the file
+            with open(self.dlpm_overrides_file, 'r') as f:
+                data = json.load(f)
+
+            # Validate format - must be a dict with string keys and integer values
+            if not isinstance(data, dict):
+                raise ValueError("Overrides file must contain a JSON object")
+
+            new_overrides = {}
+            for client_id, quantum in data.items():
+                if not isinstance(client_id, str):
+                    raise ValueError(f"Client ID must be string, got {type(client_id)}")
+                if not isinstance(quantum, int) or quantum <= 0:
+                    raise ValueError(f"Quantum must be positive integer, got {quantum}")
+                new_overrides[client_id] = quantum
+
+            # Check if overrides changed
+            if new_overrides != self.dlpm_quantum_overrides:
+                logger.info(f"DLPM overrides updated: {len(new_overrides)} clients")
+                self.dlpm_quantum_overrides = new_overrides
+
+            # Update tracking variables
+            self.dlpm_last_file_mtime = current_mtime
+            self.dlpm_last_reload_time = current_time
+
+        except json.JSONDecodeError as e:
+            logger.error(f"DLPM overrides file contains invalid JSON: {e}")
+        except (OSError, IOError) as e:
+            logger.error(f"DLPM overrides file access error: {e}")
+        except ValueError as e:
+            logger.error(f"DLPM overrides file format error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error reading DLPM overrides file: {e}")
+            return
+
+        self.dlpm_last_reload_time = current_time
 
     def _update_dlpm_metrics(self):
         """Update DLPM-specific metrics."""

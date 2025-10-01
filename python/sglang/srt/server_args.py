@@ -182,6 +182,7 @@ class ServerArgs:
     priority_scheduling_preemption_threshold: int = 10
     schedule_conservativeness: float = 1.0
     dlpm_client_quantum: int = 2500
+    dlpm_overrides_file: Optional[str] = "/app/dlpm.json"
     page_size: Optional[int] = None
     hybrid_kvcache_ratio: Optional[float] = None
     swa_full_tokens_ratio: float = 0.8
@@ -1469,6 +1470,12 @@ class ServerArgs:
             type=int,
             default=ServerArgs.dlpm_client_quantum,
             help="The quantum value for DLPM client deficit refill (default: 2500)",
+        )
+        parser.add_argument(
+            "--dlpm-overrides-file",
+            type=str,
+            default=ServerArgs.dlpm_overrides_file,
+            help="Path to JSON file containing per-client DLPM quantum overrides",
         )
         parser.add_argument(
             "--page-size",
