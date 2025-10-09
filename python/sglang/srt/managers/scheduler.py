@@ -198,7 +198,9 @@ from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 logger = logging.getLogger(__name__)
 
 # DLPM configuration constants
-DLPM_PREFILL_TOKEN_COST = 0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
+DLPM_PREFILL_TOKEN_COST = (
+    0.6  # Cost multiplier for prefill tokens (60% of decode token cost)
+)
 
 # Test retract decode for debugging purposes
 TEST_RETRACT = get_bool_env_var("SGLANG_TEST_RETRACT")
@@ -262,6 +264,7 @@ class EmbeddingBatchResult:
 @dataclass
 class DLPMClient:
     """Tracks DLPM state for a single client."""
+
     deficit: int = 0
     last_seen: float = 0
     token_delta: int = 0
@@ -1500,7 +1503,7 @@ class Scheduler(
 
             # DLPM client initialization and state update
             if self.policy.policy == CacheAwarePolicy.DLPM:
-                client_id = req.session_id if req.session_id else '<anonymous>'
+                client_id = req.session_id if req.session_id else "<anonymous>"
                 # Initialize/update client state
                 self.dlpm_clients[client_id].seen()
 
@@ -1553,7 +1556,7 @@ class Scheduler(
                 admitted_any = False
 
                 for req in current_pass_requests:
-                    client_id = req.session_id or '<anonymous>'
+                    client_id = req.session_id or "<anonymous>"
 
                     # Only admit requests from clients with positive deficits
                     client = self.dlpm_clients[client_id]
@@ -1584,7 +1587,8 @@ class Scheduler(
 
         current_time = time.perf_counter()
         inactive_clients = [
-            client_id for client_id, client in self.dlpm_clients.items()
+            client_id
+            for client_id, client in self.dlpm_clients.items()
             if current_time - client.last_seen > 3600
         ]
 
@@ -1592,7 +1596,9 @@ class Scheduler(
             del self.dlpm_clients[client_id]
 
         if inactive_clients:
-            logger.info(f"Cleaned up {len(inactive_clients)} inactive DLPM clients: {inactive_clients}")
+            logger.info(
+                f"Cleaned up {len(inactive_clients)} inactive DLPM clients: {inactive_clients}"
+            )
 
     def _update_dlpm_metrics(self):
         """Update DLPM-specific metrics."""
@@ -1612,7 +1618,9 @@ class Scheduler(
                         client_tuples.append((client_id, delta))
                         active_client_count += 1
 
-                self.stats.dlpm_top_clients = heapq.nlargest(10, client_tuples, key=lambda c: c[1])
+                self.stats.dlpm_top_clients = heapq.nlargest(
+                    10, client_tuples, key=lambda c: c[1]
+                )
                 self.stats.dlpm_active_clients = active_client_count
                 self.stats.dlpm_needs_flush = True
 
@@ -1623,7 +1631,7 @@ class Scheduler(
         token costs.
         """
         if self.policy.policy == CacheAwarePolicy.DLPM:
-            client_id = req.session_id or '<anonymous>'
+            client_id = req.session_id or "<anonymous>"
             # Subtract extend tokens from client's deficit (with prefill cost multiplier)
             prefill_token_cost = int(req.extend_input_len * DLPM_PREFILL_TOKEN_COST)
             client = self.dlpm_clients[client_id]
@@ -1634,6 +1642,18 @@ class Scheduler(
             self._set_or_validate_priority(req)
             if self._abort_on_queued_limit(req):
                 return
+            if (
+                self.enable_metrics
+                and self.enable_priority_scheduling
+                and req.priority is not None
+            ):
+                labels = {
+                    **self.metrics_collector.labels,
+                    "priority": str(req.priority),
+                }
+                self.metrics_collector.num_requests_by_priority_total.labels(
+                    **labels
+                ).inc(1)
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
             req.time_stats.wait_queue_entry_time = time.perf_counter()

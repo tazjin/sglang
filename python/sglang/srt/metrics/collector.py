@@ -156,6 +156,7 @@ class SchedulerStats:
     dlpm_refills_needed: int = 0
     dlpm_active_clients: int = 0
 
+
 class SchedulerMetricsCollector:
 
     def __init__(self, labels: Dict[str, str]) -> None:
@@ -345,7 +346,12 @@ class SchedulerMetricsCollector:
             multiprocess_mode="mostrecent",
         )
 
-        # Additional queueing time histogram
+        self.num_requests_by_priority_total = Counter(
+            name="sglang:num_requests_by_priority_total",
+            documentation="Number of requests processed by priority level.",
+            labelnames=list(labels.keys()) + ["priority"],
+        )
+
         self.queue_time = Histogram(
             name="sglang:queue_time_seconds",
             documentation="Histogram of queueing time in seconds.",
