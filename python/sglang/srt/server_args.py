@@ -2962,7 +2962,9 @@ class ServerArgs:
             assert self.schedule_policy in [
                 "fcfs",
                 "lof",
-            ], f"To use priority scheduling, schedule_policy must be 'fcfs' or 'lof'. '{self.schedule_policy}' is not supported."
+                "lpm",
+                "dlpm",
+            ], f"To use priority scheduling, schedule_policy must be 'fcfs', 'lof', 'lpm', or 'dlpm'. '{self.schedule_policy}' is not supported."
 
     def check_lora_server_args(self):
         assert self.max_loras_per_batch > 0, "max_loras_per_batch must be positive"

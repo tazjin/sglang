@@ -119,7 +119,10 @@ class SchedulePolicy:
             )
             if policy == CacheAwarePolicy.LPM or policy == CacheAwarePolicy.DLPM:
                 SchedulePolicy._sort_by_longest_prefix(
-                    waiting_queue, temporary_deprioritized
+                    waiting_queue,
+                    temporary_deprioritized,
+                    self.enable_priority_scheduling,
+                    self.schedule_low_priority_values_first,
                 )
             elif policy == CacheAwarePolicy.DFS_WEIGHT:
                 SchedulePolicy._sort_by_dfs_weight(waiting_queue, self.tree_cache)
@@ -141,7 +144,9 @@ class SchedulePolicy:
         return prefix_computed
 
     def _determine_active_policy(self, waiting_queue: List[Req]) -> Policy:
-        if (self.policy == CacheAwarePolicy.LPM or self.policy == CacheAwarePolicy.DLPM) and len(waiting_queue) > 128:
+        if (
+            self.policy == CacheAwarePolicy.LPM or self.policy == CacheAwarePolicy.DLPM
+        ) and len(waiting_queue) > 128:
             # Turn off the expensive prefix matching and sorting when the #queue is large.
             return CacheAgnosticPolicy.FCFS
         return self.policy
@@ -214,16 +219,33 @@ class SchedulePolicy:
 
     @staticmethod
     def _sort_by_longest_prefix(
-        waiting_queue: List[Req], temporary_deprioritized: Set[int]
+        waiting_queue: List[Req],
+        temporary_deprioritized: Set[int],
+        enable_priority_scheduling: bool = False,
+        schedule_low_priority_values_first: bool = False,
     ) -> None:
-        """Sorts the waiting queue based on the longest prefix match."""
-        waiting_queue.sort(
-            key=lambda r: (
-                -len(r.prefix_indices)
-                if r.rid not in temporary_deprioritized
-                else float("inf")
+        """Sorts the waiting queue based on priority first, then longest prefix match."""
+        if enable_priority_scheduling:
+            direction = 1 if schedule_low_priority_values_first else -1
+            waiting_queue.sort(
+                key=lambda r: (
+                    direction * r.priority,
+                    (
+                        -len(r.prefix_indices)
+                        if r.rid not in temporary_deprioritized
+                        else float("inf")
+                    ),
+                    r.time_stats.wait_queue_entry_time,
+                )
             )
-        )
+        else:
+            waiting_queue.sort(
+                key=lambda r: (
+                    -len(r.prefix_indices)
+                    if r.rid not in temporary_deprioritized
+                    else float("inf")
+                )
+            )
 
     @staticmethod
     def _sort_by_dfs_weight(
