@@ -193,7 +193,8 @@ class FairScheduler:
                 max_priority = None
 
                 for req in current_pass_requests:
-                    max_priority = max(max_priority or req.priority, req.priority)
+                    if req.priority:
+                        max_priority = max(max_priority or req.priority, req.priority)
                     client_id = req.session_id or "<anonymous>"
 
                     # Only admit requests from clients with positive deficits
