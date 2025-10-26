@@ -1397,6 +1397,10 @@ class Scheduler(
             self.waiting_queue.append(req)
             req.time_stats.wait_queue_entry_time = time.perf_counter()
             trace_slice_end("process req", req.rid, auto_next_anon=True)
+
+            if self.fair_scheduler and not is_retracted:
+                self.fair_scheduler.seen(req)
+
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
             self._prefetch_kvcache(req)
             self.disagg_prefill_bootstrap_queue.add(
