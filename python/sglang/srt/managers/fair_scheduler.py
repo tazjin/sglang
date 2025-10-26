@@ -35,8 +35,9 @@ class DeficitClient:
     """Tracks deficit state for a single client."""
 
     deficit: int = 0
-    last_seen: float = 0
     token_delta: int = 0
+    last_seen: float = 0
+    last_priority: int = 0
 
     def seen(self) -> None:
         self.last_seen = time.perf_counter()
@@ -146,10 +147,15 @@ class FairScheduler:
         prefill_token_cost,
         refill_quantum,
         export_top_clients,
+        enable_priority_scheduling,
     ):
+        if refill_quantum <= 0:
+            raise ValueError("deficit refill value must be positive")
+
         self.prefill_token_cost = prefill_token_cost
         self.refill_quantum = refill_quantum
         self.export_top_clients = export_top_clients
+        self.enable_priority_scheduling = enable_priority_scheduling
 
         self.clients: Dict[str, DeficitClient] = defaultdict(DeficitClient)
         self.last_metrics_update: float = time.perf_counter()
@@ -161,6 +167,9 @@ class FairScheduler:
         """
         client_id = req.session_id or "<anonymous>"
         self.clients[client_id].seen()
+
+        if self.enable_priority_scheduling:
+            self.clients[client_id].last_priority = req.priority
 
     def admission_iterator(self, waiting_queue: List[Req]):
         """
@@ -181,8 +190,10 @@ class FairScheduler:
                 # Make a copy for iteration since we might modify remaining_requests
                 current_pass_requests = remaining_requests.copy()
                 admitted_any = False
+                max_priority = None
 
                 for req in current_pass_requests:
+                    max_priority = max(max_priority or req.priority, req.priority)
                     client_id = req.session_id or "<anonymous>"
 
                     # Only admit requests from clients with positive deficits
@@ -196,16 +207,29 @@ class FairScheduler:
                         remaining_requests.remove(req)
                         admitted_any = True
 
-                # If no requests could be admitted, refill ALL deficits
-                # (including for backlogged clients not currently in the queue).
+                # Refill if no requests could be admitted
                 if not admitted_any and remaining_requests:
-                    for client in self.clients.values():
-                        if client.deficit <= 0:
-                            client.refill(self.refill_quantum)
+                    self.refill_clients(max_priority)
                     current_refill_streak += 1
 
         finally:
             self.metrics.refills_needed = refills_needed
+
+    def refill_clients(self, max_priority):
+        """
+        Refills the deficit counters for all currently backlogged clients. If
+        priority scheduling is enabled, only clients with high-priority requests
+        are refilled in each iteration.
+        """
+        for client in self.clients.values():
+            if client.deficit <= 0:
+                if (
+                    self.enable_priority_scheduling
+                    and client.last_priority < max_priority
+                ):
+                    continue
+
+                client.refill(self.refill_quantum)
 
     def cleanup_inactive_clients(self):
         """Remove client state for clients that haven't been seen in an hour."""
