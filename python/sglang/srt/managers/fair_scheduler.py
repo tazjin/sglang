@@ -155,6 +155,13 @@ class FairScheduler:
         self.last_metrics_update: float = time.perf_counter()
         self.metrics = DeficitMetrics(export_top_clients)
 
+    def seen(self, req: Req) -> None:
+        """
+        Update the client tracking state for the client of the given request.
+        """
+        client_id = req.session_id or "<anonymous>"
+        self.clients[client_id].seen()
+
     def admission_iterator(self, waiting_queue: List[Req]):
         """
         Deficit-based admission iterator that with refill logic.
