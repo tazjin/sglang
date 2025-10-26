@@ -145,15 +145,15 @@ class FairScheduler:
     def __init__(
         self,
         prefill_token_cost,
-        refill_quantum,
+        deficit_refill_value,
         export_top_clients,
         enable_priority_scheduling,
     ):
-        if refill_quantum <= 0:
+        if deficit_refill_value <= 0:
             raise ValueError("deficit refill value must be positive")
 
         self.prefill_token_cost = prefill_token_cost
-        self.refill_quantum = refill_quantum
+        self.deficit_refill_value = deficit_refill_value
         self.export_top_clients = export_top_clients
         self.enable_priority_scheduling = enable_priority_scheduling
 
@@ -229,7 +229,7 @@ class FairScheduler:
                 ):
                     continue
 
-                client.refill(self.refill_quantum)
+                client.refill(self.deficit_refill_value)
 
     def cleanup_inactive_clients(self):
         """Remove client state for clients that haven't been seen in an hour."""
