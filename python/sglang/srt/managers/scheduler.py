@@ -1379,6 +1379,15 @@ class Scheduler(
                     prefix_keys,
                 )
 
+    def _get_admission_iterator(self, waiting_queue: List[Req]):
+        """
+        Generator that yields requests for admission based on the scheduling policy.
+        """
+        if self.fair_scheduler:
+            return self.fair_scheduler.admission_iterator(waiting_queue)
+
+        return iter(waiting_queue)
+
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.NULL:
             self._set_or_validate_priority(req)
@@ -1714,7 +1723,8 @@ class Scheduler(
             lora_set = set([req.lora_id for req in self.running_batch.reqs])
 
         # Get requests from the waiting queue to a new prefill batch
-        for req in self.waiting_queue:
+        admission_iterator = self._get_admission_iterator(self.waiting_queue)
+        for req in admission_iterator:
 
             if self.enable_lora and not self.tp_worker.can_run_lora_batch(
                 lora_set
