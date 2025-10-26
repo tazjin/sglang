@@ -236,6 +236,12 @@ class ServerArgs:
     disable_hybrid_swa_memory: bool = False
     radix_eviction_policy: str = "lru"
 
+    # Fair scheduling logic
+    enable_fair_scheduling: bool = False
+    enable_top_clients_metric: bool = False
+    deficit_refill_value: int = 2500
+    relative_prompt_cost: int = 60
+
     # Runtime options
     device: Optional[str] = None
     elastic_ep_backend: Literal[None, "mooncake"] = None
@@ -1869,6 +1875,30 @@ class ServerArgs:
             type=float,
             default=ServerArgs.schedule_conservativeness,
             help="How conservative the schedule policy is. A larger value means more conservative scheduling. Use a larger value if you see requests being retracted frequently.",
+        )
+        parser.add_argument(
+            "--enable-fair-scheduling",
+            action="store_true",
+            default=ServerArgs.enable_fair_scheduling,
+            help="Enable fair scheduling. Resources are more evenly divided between clients, preventing starvation.",
+        )
+        parser.add_argument(
+            "--enable-top-clients-metric",
+            action="store_true",
+            default=ServerArgs.enable_top_clients_metric,
+            help="Continously export a metric for the current top 10 clients of the fair scheduler.",
+        )
+        parser.add_argument(
+            "--deficit-refill-value",
+            type=int,
+            default=ServerArgs.deficit_refill_value,
+            help="The value for fair scheduling deficit refills (default: 2500), tune based on refills_needed metric.",
+        )
+        parser.add_argument(
+            "--relative-prompt-cost",
+            type=int,
+            default=ServerArgs.relative_prompt_cost,
+            help="The relative cost of prompt tokens for fair scheduling usage tracking, in percent. (default: 60%)",
         )
         parser.add_argument(
             "--page-size",
