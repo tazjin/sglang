@@ -1762,7 +1762,11 @@ class Scheduler(
                 truncation_align_size=self.truncation_align_size,
             )
 
-            if res != AddReqResult.CONTINUE:
+            if res == AddReqResult.CONTINUE:
+                # Fair scheduler needs to know if admission succeeded.
+                if self.fair_scheduler:
+                    self.fair_scheduler.acknowledge_admission(req)
+            else:
                 if res == AddReqResult.NO_TOKEN:
                     if self.enable_hierarchical_cache:
                         # Set batch_is_full after making sure there are requests that can be served
