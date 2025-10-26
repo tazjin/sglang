@@ -318,6 +318,8 @@ class SchedulerOutputProcessorMixin:
             new_accepted_len = 1
             if batch.spec_algorithm.is_none():
                 req.output_ids.append(next_token_id)
+                if self.fair_scheduler:
+                    self.fair_scheduler.account_decode_tokens(req, 1)
             elif batch.is_v2_eagle:
                 # Only v2 eagle's output_ids are updated here.
                 req.output_ids.extend(next_token_id)
@@ -340,6 +342,9 @@ class SchedulerOutputProcessorMixin:
                         req.req_pool_idx
                     ][start_p:end_p]
                     self.token_to_kv_pool_allocator.free(indices_to_free)
+
+                if not batch.spec_algorithm.is_none and self.fair_scheduler:
+                    self.fair_scheduler.account_decode_tokens(req, len(req.output_ids))
 
                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
                     # Asynchronously offload KV cache; cache_finished_req will be called after Device->Host transfer completes
