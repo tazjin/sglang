@@ -180,10 +180,16 @@ class FairScheduler:
         """
         remaining_requests = waiting_queue.copy()
 
-        # track the maximum number of refills we had to do before any client
-        # could progress, giving a sort of "fairness pressure" signal
+        # Track the maximum number of refills we had to do before any client
+        # could progress, giving a sort of "fairness pressure" signal.
         refills_needed = 0
         current_refill_streak = 0
+
+        # Track all loans, that is, requests which were emitted for scheduling
+        # but which are not yet acknowledged (as this only happens after the
+        # iterator has finished). This is necessary to prevent a client from
+        # monopolising a batch by having a lot of requests and positive credits.
+        loans: Dict[str, int] = defaultdict(int)
 
         try:
             starved_per_priority: Dict[int, Set[str]] = defaultdict(set)
@@ -199,11 +205,12 @@ class FairScheduler:
 
                     # Only admit requests from clients with positive deficits
                     client = self.clients[client_id]
-                    if client.deficit > 0:
+                    if client.deficit - loans[client_id] > 0:
                         if current_refill_streak > 0:
                             refills_needed = max(refills_needed, current_refill_streak)
                             current_refill_streak = 0
 
+                        loans[client_id] += req.extend_input_len
                         yield req
                         remaining_requests.remove(req)
                         admitted_any = True
