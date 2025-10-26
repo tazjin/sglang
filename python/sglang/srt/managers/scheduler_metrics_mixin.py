@@ -183,6 +183,11 @@ class SchedulerMetricsMixin:
             self.calculate_utilization()
             self.metrics_collector.log_stats(self.stats)
             self._emit_kv_metrics()
+
+            # Fair scheduling
+            if self.fair_scheduler:
+                self.fair_scheduler.update_metrics(self.metrics_collector.labels)
+
         self._publish_kv_events()
 
     def log_decode_stats(

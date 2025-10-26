@@ -215,3 +215,6 @@ class SchedulerRuntimeCheckerMixin:
         self.check_tree_cache()
         self.new_token_ratio = self.init_new_token_ratio
         self.maybe_sleep_on_idle()
+
+        if self.fair_scheduler:
+            self.fair_scheduler.cleanup_inactive_clients()
