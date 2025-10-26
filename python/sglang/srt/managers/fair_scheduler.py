@@ -24,7 +24,7 @@ import logging
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 from sglang.srt.managers.schedule_batch import Req
 
 logger = logging.getLogger(__name__)
@@ -186,15 +186,15 @@ class FairScheduler:
         current_refill_streak = 0
 
         try:
+            starved_per_priority: Dict[int, Set[str]] = defaultdict(set)
+
             while remaining_requests:
                 # Make a copy for iteration since we might modify remaining_requests
                 current_pass_requests = remaining_requests.copy()
                 admitted_any = False
-                max_priority = None
+                starved_per_priority.clear()
 
                 for req in current_pass_requests:
-                    if req.priority:
-                        max_priority = max(max_priority or req.priority, req.priority)
                     client_id = req.session_id or "<anonymous>"
 
                     # Only admit requests from clients with positive deficits
@@ -207,21 +207,28 @@ class FairScheduler:
                         yield req
                         remaining_requests.remove(req)
                         admitted_any = True
+                    elif self.enable_priority_scheduling and req.priority:
+                        starved_per_priority[req.priority].add(client_id)
 
                 # Refill if no requests could be admitted
                 if not admitted_any and remaining_requests:
-                    self.refill_clients(max_priority)
+                    self.refill_clients(starved_per_priority)
                     current_refill_streak += 1
 
         finally:
             self.metrics.refills_needed = refills_needed
 
-    def refill_clients(self, max_priority):
+    def refill_clients(self, starved_per_priority: Dict[int, Set[str]]):
         """
         Refills the deficit counters for all currently backlogged clients. If
         priority scheduling is enabled, only clients with high-priority requests
         are refilled in each iteration.
         """
+        if starved_per_priority:
+            max_priority = max(starved_per_priority.keys())
+            for client in starved_per_priority[max_priority]:
+                self.clients[client].refill(self.deficit_refill_value)
+
         for client in self.clients.values():
             if client.deficit <= 0:
                 if (
