@@ -192,6 +192,8 @@ from sglang.srt.utils.hf_transformers_utils import (
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 
+from sglang.srt.managers.fair_scheduler import FairScheduler
+
 logger = logging.getLogger(__name__)
 
 # Test retract decode for debugging purposes
@@ -444,6 +446,14 @@ class Scheduler(
         )
         # Enable preemption for priority scheduling.
         self.try_preemption = self.enable_priority_scheduling
+
+        self.fair_scheduler = None
+        if server_args.enable_fair_scheduling:
+            self.fair_scheduler = FairScheduler(
+                prefill_token_cost=(server_args.relative_prompt_cost / 100),
+                deficit_refill_value=server_args.deficit_refill_value,
+                export_top_clients=server_args.enable_top_clients_metric,
+            )
 
         assert (
             server_args.schedule_conservativeness >= 0
