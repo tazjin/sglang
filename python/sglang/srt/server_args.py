@@ -3453,11 +3453,11 @@ class ServerArgs:
         )
 
         # Check scheduling policy
-        if self.enable_priority_scheduling:
+        if self.enable_priority_scheduling and not self.enable_fair_scheduling:
             assert self.schedule_policy in [
                 "fcfs",
                 "lof",
-            ], f"To use priority scheduling, schedule_policy must be 'fcfs' or 'lof'. '{self.schedule_policy}' is not supported."
+            ], f"To use priority scheduling without fair scheduling, schedule_policy must be 'fcfs' or 'lof'. '{self.schedule_policy}' is not supported."
 
         # Check multi-item scoring
         if self.multi_item_scoring_delimiter is not None:
