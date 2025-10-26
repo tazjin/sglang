@@ -1763,6 +1763,9 @@ class Scheduler(
             )
 
             if res != AddReqResult.CONTINUE:
+                # fair scheduler needs to know about rejections
+                if self.fair_scheduler:
+                    self.fair_scheduler.reject_admission(req)
                 if res == AddReqResult.NO_TOKEN:
                     if self.enable_hierarchical_cache:
                         # Set batch_is_full after making sure there are requests that can be served
