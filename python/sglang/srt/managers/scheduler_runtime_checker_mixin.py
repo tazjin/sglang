@@ -251,6 +251,9 @@ class SchedulerRuntimeCheckerMixin:
         self.new_token_ratio = self.init_new_token_ratio
         self.maybe_sleep_on_idle()
 
+        if self.fair_scheduler:
+            self.fair_scheduler.cleanup_inactive_clients()
+
     def watchdog_thread(self: Scheduler):
         """A watch dog thread that will try to kill the server itself if one forward batch takes too long."""
         self.watchdog_last_forward_ct = 0
