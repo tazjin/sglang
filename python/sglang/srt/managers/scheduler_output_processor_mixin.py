@@ -354,14 +354,23 @@ class SchedulerOutputProcessorMixin:
             new_accepted_len = 1
             if batch.spec_algorithm.is_none():
                 req.output_ids.append(next_token_id)
+                if self.fair_scheduler:
+                    self.fair_scheduler.account_decode_tokens(req, 1)
             elif batch.is_v2_eagle:
                 # Only v2 eagle's output_ids are updated here.
                 req.output_ids.extend(next_token_id)
                 new_accepted_len = len(next_token_id)
+                if self.fair_scheduler:
+                    self.fair_scheduler.account_decode_tokens(req, len(next_token_id))
+
 
             req.check_finished(new_accepted_len)
 
             if req.finished():
+                # account for other spec-decoding cases after completion
+                if self.fair_scheduler and not batch.spec_algorithm.is_none and not batch.is_v2_eagle:
+                    self.fair_scheduler.account_decode_tokens(req, len(req.output_ids))
+
                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
                     # Asynchronously offload KV cache; release_kv_cache will be called after Device->Host transfer completes
                     if not self.decode_offload_manager.offload_kv_cache(req):
