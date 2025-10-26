@@ -197,6 +197,7 @@ class OpenAIServingChat(OpenAIServingBase):
             priority=request.priority,
             custom_labels=custom_labels,
             custom_logit_processor=request.custom_logit_processor,
+            user=request.user,
         )
 
         return adapted_request, request
