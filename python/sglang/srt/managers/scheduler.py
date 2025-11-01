@@ -453,6 +453,7 @@ class Scheduler(
                 prefill_token_cost=(server_args.relative_prompt_cost / 100),
                 deficit_refill_value=server_args.deficit_refill_value,
                 export_top_clients=server_args.enable_top_clients_metric,
+                enable_priority_scheduling=server_args.enable_priority_scheduling,
             )
 
         assert (

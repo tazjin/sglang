@@ -146,10 +146,12 @@ class FairScheduler:
         prefill_token_cost,
         deficit_refill_value,
         export_top_clients,
+        enable_priority_scheduling,
     ):
         self.prefill_token_cost = prefill_token_cost
         self.deficit_refill_value = deficit_refill_value
         self.export_top_clients = export_top_clients
+        self.enable_priority_scheduling = enable_priority_scheduling
 
         self.clients: Dict[str, DeficitClient] = defaultdict(DeficitClient)
         self.last_metrics_update: float = time.perf_counter()
@@ -181,11 +183,19 @@ class FairScheduler:
                 # Make a copy for iteration since we might modify remaining_requests
                 current_pass_requests = remaining_requests.copy()
                 admitted_any = False
+                current_priority = current_pass_requests[0].priority or 0
 
                 for req in current_pass_requests:
-                    client_id = req.session_id or "<anonymous>"
+                    # Exit if the priority band changes, causing the scheduler
+                    # to prioritise priority bands in the order provided by
+                    # sglang.
+                    if self.enable_priority_scheduling:
+                        this_priority = req.priority or 0
+                        if this_priority != current_priority:
+                            break
 
                     # Only admit requests from clients with positive deficits
+                    client_id = req.session_id or "<anonymous>"
                     client = self.clients[client_id]
                     if client.deficit > 0:
                         if current_refill_streak > 0:
