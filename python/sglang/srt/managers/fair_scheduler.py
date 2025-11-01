@@ -192,6 +192,8 @@ class FairScheduler:
                             refills_needed = max(refills_needed, current_refill_streak)
                             current_refill_streak = 0
 
+                        cost = int(req.extend_input_len * self.prefill_token_cost)
+                        client.consume_tokens(cost)
                         yield req
                         remaining_requests.remove(req)
                         admitted_any = True
@@ -224,14 +226,17 @@ class FairScheduler:
                 f"Cleaned up {len(inactive_clients)} inactive deficit clients: {inactive_clients}"
             )
 
-    def acknowledge_admission(self, req: Req):
+    def reject_admission(self, req: Req):
         """
-        Called by the scheduler when a request is actually admitted into a batch.
+        Called by the scheduler when a request is rejected from a batch after
+        being admitted. This might happen if the batch could not fit all of its
+        expected tokens, and causes the fair scheduler to undo the accounting
+        for that request.
         """
 
         client_id = req.session_id or "<anonymous>"
-        # Subtract extend tokens from client's deficit (with prefill cost multiplier)
-        cost = int(req.extend_input_len * self.prefill_token_cost)
+        # Refill extend tokens of this request
+        cost = -1 * int(req.extend_input_len * self.prefill_token_cost)
         self.clients[client_id].consume_tokens(cost)
 
     def account_decode_tokens(self, req: Req, tokens: int):
