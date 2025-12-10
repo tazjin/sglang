@@ -39,6 +39,7 @@ from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constrained.base_grammar_backend import (
     INVALID_GRAMMAR_OBJ,
     create_grammar_backend,
+    BaseGrammarObject,
 )
 from sglang.srt.disaggregation.decode import (
     DecodePreallocQueue,
@@ -716,6 +717,11 @@ class Scheduler(
             self.tokenizer.think_end_id = self.tokenizer.encode(
                 reasoning_parser.detector.think_end_token, add_special_tokens=False
             )[0]
+            think_start_tokens = self.tokenizer.encode(
+                reasoning_parser.detector.think_start_token, add_special_tokens=False
+            )
+            if think_start_tokens:
+                self.tokenizer.think_start_id = think_start_tokens[0]
 
     def init_cache_with_memory_pool(self):
         server_args = self.server_args
@@ -1444,6 +1450,9 @@ class Scheduler(
                 value, cache_hit = self.grammar_backend.get_cached_or_future_value(key)
                 req.grammar = value
 
+                if cache_hit:
+                    self._set_grammar_reasoning(req, value)
+
                 if not cache_hit:
                     req.grammar_key = key
                     add_to_grammar_queue = True
@@ -1456,6 +1465,16 @@ class Scheduler(
             self.grammar_queue.append(req)
         else:
             self._add_request_to_queue(req)
+
+    def _set_grammar_reasoning(self, req: Req, grammar: BaseGrammarObject):
+        if (
+            hasattr(self.tokenizer, "think_start_id")
+            and hasattr(grammar, "set_reasoning_active")
+            and req.origin_input_ids
+            and len(req.origin_input_ids) > 0
+            and req.origin_input_ids[-1] == self.tokenizer.think_start_id
+        ):
+            grammar.set_reasoning_active()
 
     def handle_batch_generate_request(
         self,
@@ -2164,6 +2183,8 @@ class Scheduler(
 
                 req.grammar = req.grammar.result(timeout=0.03)
                 self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+                self._set_grammar_reasoning(req, req.grammar)
+
                 if req.grammar is INVALID_GRAMMAR_OBJ:
                     error_msg = f"Invalid grammar request: {req.grammar_key=}"
                     req.set_finish_with_abort(error_msg)
@@ -2198,6 +2219,8 @@ class Scheduler(
                     continue
                 req.grammar = req.grammar.result()
                 self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+                self._set_grammar_reasoning(req, req.grammar)
+
                 if req.grammar is INVALID_GRAMMAR_OBJ:
                     error_msg = f"Invalid grammar request: {req.grammar_key=}"
                     req.set_finish_with_abort(error_msg)

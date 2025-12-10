@@ -29,9 +29,12 @@ class ReasonerGrammarObject(BaseGrammarObject):
         super().__init__()
         self.grammar = grammar
         self.think_end_id = think_end_id
-        # -1    means thinking has not ended yet
+        # -1    means thinking has not ended yet (we are inside reasoning)
         # 0     means just ended thinking in the last token
         # +     means number of tokens after thinking ended
+        self.tokens_after_think_end = 0
+
+    def set_reasoning_active(self):
         self.tokens_after_think_end = -1
 
     def transfer_state(self, token: int) -> int:
